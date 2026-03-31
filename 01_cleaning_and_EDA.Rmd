@@ -1,0 +1,18 @@
+---
+title: "Entrega 1"
+output: html_document
+---
+
+```{r Libraries, message=FALSE, warning=FALSE}
+library(readxl)
+```
+
+```{r read data}
+url <- "data/Global_Carbon_budget_2025.xlsx"
+skip <- 20
+sheet <- 2
+
+data <- read_excel(url, sheet = sheet, skip = skip)
+
+head(data)
+```
