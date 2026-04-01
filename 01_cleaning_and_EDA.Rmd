@@ -3,16 +3,273 @@ title: "Entrega 1"
 output: html_document
 ---
 
-```{r Libraries, message=FALSE, warning=FALSE}
+## Integrantes:
+
+-   Igor Pires Ferreira - 15459924
+
+------------------------------------------------------------------------
+
+```{r setup, message=FALSE, warning=FALSE}
+# Rode renv::restore()
+
+# Pacotes
 library(readxl)
+library(curl)
+library(tidyverse)
+library(skimr)
 ```
 
-```{r read data}
-url <- "data/Global_Carbon_budget_2025.xlsx"
-skip <- 20
-sheet <- 2
+------------------------------------------------------------------------
 
-data <- read_excel(url, sheet = sheet, skip = skip)
+## 1. Obtendo os Dados
 
-head(data)
+```{r read data, message=FALSE}
+# baixando dados do meu github
+url_carbon_budget <- "https://raw.githubusercontent.com/Igor0Pires/r-econometrics-time-series-modeling-co2/main/data/Global_Carbon_budget_2025.xlsx"
+
+tmp_path <-  tempfile(fileext = ".xlsx") 
+curl_download(url_carbon_budget, tmp_path) # crio tmps para evitar de ficar salvando no pc
+
+sheet <- 2 
+skip_header <- 21 # Dados começam aqui
+
+df_emissoes <- unique(read_excel(tmp_path, sheet = sheet, skip = skip_header, na = "N/A", ))
+```
+
+## 2. Primeiras Impressões
+
+```{r first steps}
+
+glimpse(df_emissoes)
+
+
+```
+
+> Aqui aparece alguns problemas iniciais:
+>
+> 1.  Nome das colunas estão bem poucos descritivas, isso pode atrapalhar no futuro
+> 2.  Alguns tipos das variáveis estão em `<character>`, investigaremos isso
+
+## 3. Examinando os Dados
+
+Aqui a estratégia será a seguinte, primeiro alteraremos o nome das colunas, depois precisamos saber o que exatamente está acontecendo com os dados para estarem em `<character>`, para isso criarei um diagnóstico simples:
+
+-   Baseado no dataframe criarei um nova em formato longo com apenas duas colunas:
+
+    -   `column`: Nome da coluna que está vindo aquele dado
+
+    -   `original_value`: Valor no `df_emissoes`
+
+-   Depois, tentarei converter todos esses valores para numéricos (transformará em "n/a" aqueles que não poderem ser convertidos)
+
+-   Filtrarei apenas esses valores "n/a", retornando os valores originais deles assim, podemos entender melhor os dados
+
+```{r examinig, warning=FALSE}
+
+# Alterando os nomes das colunas
+names(df_emissoes) <- c("ano", "emissao_combustivel_fossil", "emissao_uso_do_solo", "crescimento_concentracao_atmosferica", "absorcao_oceano", "absorcao_biosfera", "carbonatacao_cimento", "budget_imbalance")
+
+# Alterando os tipos de dados
+diagnostic <-  df_emissoes %>% 
+  pivot_longer(where(is.character), names_to = "column", values_to = "original_value") %>%  
+  mutate(try_number = as.numeric(original_value)) %>% 
+  filter(is.na(try_number) & !is.na(original_value)) %>%
+  select(column, original_value) %>% 
+  arrange(column)
+
+print(diagnostic)
+
+```
+
+## 4. Tratando os Caracteres
+
+Felizmente, são apenas 8 dados com formatação óbviamente incorretas, podemos tratar manualmente cada um:
+
+```{r processing char, warning=FALSE}
+
+df_emissoes <- df_emissoes %>% 
+  mutate(
+    absorcao_oceano = recode(absorcao_oceano, 
+                             "1,0836,8602196766" = "1.08368602196766",
+                             "1,221066,71819661" = "1.22106671819661",
+                             "2,282717713.12072" = "2.28271771312072",
+                             "3,12332524.846552" = "3.12332524846552" 
+                             ),
+    ano = recode(ano, "31/06/61" = "1961"),
+    emissao_combustivel_fossil = recode(emissao_combustivel_fossil,
+                                        "3.,23761605363027" = "3.23761605363027",
+                                        "5,498052122,57387" = "5.49805212257387"),
+    emissao_uso_do_solo = recode(emissao_uso_do_solo, "1,7268366,6666667" = "1.72683666666667"))
+
+df_emissoes <- df_emissoes %>% mutate(across(where(is.character), as.numeric))
+```
+
+## 5. Avaliando Consistência
+
+Próximo passo será descrever os dados e analisar possiveis inconsistencias
+
+```{r describe}
+skim(df_emissoes)
+
+nrow(df_emissoes)
+```
+
+Aqui aparecem outros problemas:
+
+1.  O mais óbvio é que existem valores desproporcionais ao resto da série, provavelmente foram valores com má formatação que passaram na conversão
+
+2.  A série vai de 1959 - 2024 (66 anos), mas no df existem 69 linhas, provavelmente linhas duplicadas,
+
+3.  Também existe um valor "n/a" na coluna ano, volto nela mais tarde.
+
+## 6. Tratando Valores Atípicos
+
+A estratégia aqui será bem direta:
+
+-   Primeiro, tratar os anos incorretos, assumindo que os dados recebidos estão em sequência temporal podemos pegar o ano da linha de baixo e somar 1
+
+    -   **Nota:** sei que isso é perigoso, há o caso de 1972, por exemplo, que é duplicado e mal formatado, além disso, 1971 está faltante, assim assumo que 1971 seria o primeiro 1972 da sequencia, pelo menos isso não parece absurdo. Outro ponto, poderia ser dito que com essa medida eu posso pegar como referência um ano duplicado, assim me daria outro duplicado, descobriremos se aconteceu caso o número de duplicados aumente.
+
+```{r ano processing, warning=FALSE}
+df_emissoes$ano[df_emissoes$ano>2024 & !is.na(df_emissoes$ano)] <- df_emissoes$ano[which(df_emissoes$ano>2024 & !is.na(df_emissoes$ano)) - 1] + 1
+
+# Verificando se funcionou, primeiro vejo se aumentou o número de duplicados, depois vejo se vale que o ano anterior = lag(ano)
+unique(df_emissoes$ano[duplicated(df_emissoes$ano)]) # Ainda apenas 2
+
+sum(df_emissoes$ano != lag(df_emissoes$ano) + 1, na.rm = TRUE) # Ainda apenas 2, apenas os duplicados.
+```
+
+-   Agora, para lidar com os outliers, vamos basicamente assumir que todos deveriam estar entre 0 e 10, também é uma suposição forte, mas o summary indica que apenas a emissao_combustivel_fossil passa de 5 a partir do terceiro quartil, e como veremos seus valores não passarão disso após o tratamento dos outliers.
+
+Para isso vou normalizar esses valores para as unidades, utilizando a função: $$
+  f(x) = \frac{x}{10^{\lfloor \log_{10}(x) \rfloor}}
+$$ Podemos fazer o mesmo para valores extremamente pequenos usando o mesmo raciocício, exceto para o `carbonatacao_cimento` parece que o padrão está entre 0 e 1, usamos a mesma fórmula com ceiling.
+
+```{r outliers, warning=FALSE}
+df_emissoes <- df_emissoes %>% 
+  mutate(across(-c(ano, carbonatacao_cimento), ~ ifelse(abs(.) > 20 | abs(.) < 0.00001 , . / 10^floor(log10(abs(.))), .))) %>% 
+           mutate(across(carbonatacao_cimento, ~ ifelse(abs(.) > 1 | abs(.) < 0.00001 , . / 10^ceiling(log10(abs(.))), .)))
+
+
+skim(df_emissoes)
+```
+
+-   Terceiro, lidaremos com o valor nulo do ano, primeiro vamos analisar:
+
+    ```{r Year null}
+    df_emissoes_indexed = df_emissoes %>% 
+      mutate(idx = row_number())
+          
+    df_emissoes_indexed[c(1, which(is.na(df_emissoes$ano))),] # Parece que está na última linha
+
+    ```
+
+### 6.1 Calculando identidade da série
+
+Note que o valor do `crescimento_concentracao_atmosferica` é o único valor dessa útima linha linha "fantasma", ao mesmo tempo que é a única instância faltante no primeiro ano da série, minha hipótese é que esta coluna esteja deslocada um período a frente.
+
+Para provar isso, precisamos analisar se vale a identidade da série:
+
+$$
+ cca_t = eqcf_t + ems_t - aeo_t - cac_t - buim_t 
+$$
+
+quando defasamos esta coluna.
+
+```{r identity check, warning=FALSE}
+# Defasando o crescimento_concentra_atmosferica
+if(is.na(df_emissoes$crescimento_concentracao_atmosferica[1])) {
+  df_emissoes$crescimento_concentracao_atmosferica = lead(df_emissoes$crescimento_concentracao_atmosferica)
+  
+  # Apagando a última linha, agora vazia
+  df_emissoes = df_emissoes[-nrow(df_emissoes),]
+}
+
+# Calculando Identidade
+calculate_identity <- function(df) {
+  df %>%
+  mutate(check_identity = coalesce(crescimento_concentracao_atmosferica, 0) - 
+           (
+             coalesce(emissao_combustivel_fossil, 0)
+             + coalesce(emissao_uso_do_solo, 0)
+             - coalesce(absorcao_oceano, 0)
+             - coalesce(absorcao_biosfera, 0)
+             - coalesce(carbonatacao_cimento, 0)
+             - coalesce(budget_imbalance, 0)
+             )
+         )
+    
+}
+df_emissoes <- calculate_identity(df_emissoes) 
+
+# Verificando a identidade em linhas sem valores faltantes ou anos duplicados
+df_emissoes %>% 
+  group_by(ano) %>% 
+  filter(n() == 1) %>% 
+  ungroup() %>% 
+  filter(!if_any(everything(), is.na)) %>% 
+  skim(check_identity)
+```
+
+Parece que nossa hipótese é válida, a identidade é satisfeita para as linhas sem valores faltantes ou não duplicadas, e o valor faltante do ano foi corrigido. Isso também nos dá forte indicações de que nosso tratamento está correto.
+
+## 7. Consertando Linhas Duplicadas
+
+Primeiro, sabemos que ainda existem 2 anos duplicados: 1967 e 1980, vamos analisar as linhas deles:
+
+```{r idx duplicates, warning=FALSE}
+df_emissoes %>% filter(ano %in% c(1967, 1980)) %>% arrange(ano)
+```
+
+Parece que para 1697 os valores são idênticos, e para 1980 existe uma anormalidade na primeira ocorrência, então parece certo deletá-las
+
+```{r removing duplicates, warning=FALSE}
+# Apagando a primeira ocorrência de cada uma
+df_emissoes <- df_emissoes[!duplicated(df_emissoes$ano, fromLast = TRUE),]
+```
+
+## 8. Tratando Valores Ausentes
+
+Conhecendo a identidade e estando todas no mesmo período, podemos tratar diretamente alguns valores nulos da série, sem risco de data leakage.
+
+```{r na processing, warning = FALSE}
+
+
+df_emissoes <- df_emissoes %>% 
+  mutate(
+    across(
+    -c(ano, absorcao_oceano, check_identity),
+    ~ ifelse(
+      is.na(.x) & rowSums(across(-c(ano, absorcao_oceano, check_identity), is.na)) == 1,
+      check_identity,
+      .x
+    )
+  )
+)
+
+# Verificando as linhas que ainda tem valores nulos
+df_emissoes %>% filter(if_any(everything(), is.na))
+
+
+```
+
+Parece que em 2003 há 2 valores nulos, impossibilitando inferir qual o valor correto para qualquer um deles.
+
+## 9. Análise Exploratória
+
+```{r EDA}
+# Salvando os dados
+write.csv(df_emissoes, "./data/df_emissoes_slvr.csv")
+skim(df_emissoes)
+```
+
+```{r}
+for (col in setdiff(names(df_emissoes), "ano")) {
+  p <- ggplot(df_emissoes, aes(x = ano, y=.data[[col]])) +
+    geom_line() +
+    labs(title = col, y = col)
+  print(p)
+}
+
+
 ```
