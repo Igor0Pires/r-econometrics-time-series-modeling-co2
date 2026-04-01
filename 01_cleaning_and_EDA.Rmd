@@ -1,5 +1,5 @@
 ---
-title: "Entrega 1"
+title: "Entrega 1 - Limpeza e Análise Inicial"
 output: html_document
 ---
 
@@ -17,6 +17,7 @@ library(readxl)
 library(curl)
 library(tidyverse)
 library(skimr)
+library(gt)
 ```
 
 ------------------------------------------------------------------------
@@ -40,15 +41,15 @@ df_emissoes <- unique(read_excel(tmp_path, sheet = sheet, skip = skip_header, na
 
 ```{r first steps}
 
-glimpse(df_emissoes)
+skim(df_emissoes)
 
 
 ```
 
-> Aqui aparece alguns problemas iniciais:
->
-> 1.  Nome das colunas estão bem poucos descritivas, isso pode atrapalhar no futuro
-> 2.  Alguns tipos das variáveis estão em `<character>`, investigaremos isso
+Aqui aparece alguns problemas iniciais:
+
+1.  Nome das colunas estão bem poucos descritivas, isso pode atrapalhar no futuro
+2.  Alguns tipos das variáveis estão em `<character>`, investigaremos isso
 
 ## 3. Examinando os Dados
 
@@ -77,7 +78,7 @@ diagnostic <-  df_emissoes %>%
   select(column, original_value) %>% 
   arrange(column)
 
-print(diagnostic)
+gt(diagnostic)
 
 ```
 
@@ -153,22 +154,24 @@ df_emissoes <- df_emissoes %>%
 
 skim(df_emissoes)
 ```
-
+### 6.1 Lidando com o valor nulo do ano
 -   Terceiro, lidaremos com o valor nulo do ano, primeiro vamos analisar:
 
     ```{r Year null}
     df_emissoes_indexed = df_emissoes %>% 
       mutate(idx = row_number())
           
-    df_emissoes_indexed[c(1, which(is.na(df_emissoes$ano))),] # Parece que está na última linha
+    gt(df_emissoes_indexed[c(1, which(is.na(df_emissoes$ano))),]) # Parece que está na última linha
 
     ```
 
-### 6.1 Calculando identidade da série
+
 
 Note que o valor do `crescimento_concentracao_atmosferica` é o único valor dessa útima linha linha "fantasma", ao mesmo tempo que é a única instância faltante no primeiro ano da série, minha hipótese é que esta coluna esteja deslocada um período a frente.
 
 Para provar isso, precisamos analisar se vale a identidade da série:
+
+### 6.2 Calculando identidade da série
 
 $$
  cca_t = eqcf_t + ems_t - aeo_t - cac_t - buim_t 
@@ -218,7 +221,7 @@ Parece que nossa hipótese é válida, a identidade é satisfeita para as linhas
 Primeiro, sabemos que ainda existem 2 anos duplicados: 1967 e 1980, vamos analisar as linhas deles:
 
 ```{r idx duplicates, warning=FALSE}
-df_emissoes %>% filter(ano %in% c(1967, 1980)) %>% arrange(ano)
+gt(df_emissoes %>% filter(ano %in% c(1967, 1980)) %>% arrange(ano))
 ```
 
 Parece que para 1697 os valores são idênticos, e para 1980 existe uma anormalidade na primeira ocorrência, então parece certo deletá-las
@@ -238,17 +241,30 @@ Conhecendo a identidade e estando todas no mesmo período, podemos tratar direta
 df_emissoes <- df_emissoes %>% 
   mutate(
     across(
-    -c(ano, absorcao_oceano, check_identity),
+      c(emissao_combustivel_fossil, emissao_uso_do_solo),
     ~ ifelse(
-      is.na(.x) & rowSums(across(-c(ano, absorcao_oceano, check_identity), is.na)) == 1,
+      is.na(.x) & rowSums(across(-c(ano, check_identity), is.na)) == 1,
       check_identity,
       .x
+      )
+     )
+    ) %>% 
+  
+  # Agora, os que entrarão negativos
+  mutate(
+    across(
+      -c(emissao_combustivel_fossil, emissao_uso_do_solo, check_identity),
+      ~ ifelse(
+        is.na(.x) & rowSums(across(-c(ano, check_identity), is.na)) == 1,
+        -check_identity,
+        .x
+      )
     )
   )
-)
+
 
 # Verificando as linhas que ainda tem valores nulos
-df_emissoes %>% filter(if_any(everything(), is.na))
+gt(df_emissoes %>% filter(if_any(everything(), is.na)))
 
 
 ```
