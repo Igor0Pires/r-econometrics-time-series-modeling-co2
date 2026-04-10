@@ -1,28 +1,29 @@
 ---
 title: "Entrega 1 - Limpeza e Análise Inicial"
 output:
+  word_document: default
   html_document: default
 ---
 
 ## Integrantes:
 
--   Igor Pires Ferreira - 15459924
--   Arthur Oliveira Santos - 15493902
--   Enrico Vitolo - 14568069
+-   Arthur Oliveira Santos – 15493902
+-   Bernardo Zugliani –
+-   Enrico Vitolo – 14568069
+-   Igor Pires Ferreira – 15459924
+-   Rafael Fonseca Berioni – 15485100
 
 ------------------------------------------------------------------------
 
-```{r setup, message=FALSE, warning=FALSE}
-# Rode renv::restore()
+```{r setup, message=FALSE, warning=FALSE, include=FALSE}
+# importando pacotes
+packages <- c("readxl", "curl", "tidyverse", "skimr", "gt", "patchwork")
 
-# Pacotes
-library(readxl)
-library(curl)
-library(tidyverse)
-library(skimr)
-library(psych)
-library(patchwork)
-library(corrplot)
+packages_to_install <- packages[!(packages %in% installed.packages()[,"Package"])]
+if(length(packages_to_install)) install.packages(packages_to_install)
+
+
+lapply(packages, library, character.only = TRUE)
 ```
 
 ------------------------------------------------------------------------
@@ -47,8 +48,15 @@ df_emissoes <- unique(read_excel(tmp_path, sheet = sheet, skip = skip_header, na
 ## 2. Primeiras Impressões
 
 ```{r first steps, warning=FALSE}
+desc = function(df) {
+  skim(df_emissoes) %>% 
+  as_tibble() %>%
+  select(where(~all(!is.na(.)))) %>%
+  select(-ncol(.))
+}
 
-skim(df_emissoes)
+desc(df_emissoes) %>% gt()
+
 
 ```
 
@@ -116,7 +124,8 @@ df_emissoes <- df_emissoes %>% mutate(across(where(is.character), as.numeric))
 Próximo passo será descrever os dados e analisar possiveis inconsistencias
 
 ```{r describe, warning=FALSE}
-skim(df_emissoes)
+desc(df_emissoes) %>% gt()
+dim(df_emissoes)
 ```
 
 Aqui aparecem outros problemas:
@@ -133,9 +142,10 @@ A estratégia aqui será bem direta:
 
 -   Primeiro, tratar os anos incorretos, assumindo que os dados recebidos estão em sequência temporal podemos pegar o ano da linha de baixo e somar 1
 
-    -   **Nota:** sei que isso é perigoso, há o caso de 1972, por exemplo, que é duplicado e mal formatado, além disso, 1971 está faltante, assim assumo que 1971 seria o primeiro 1972 da sequencia, pelo menos isso não parece absurdo. Outro ponto, poderia ser dito que com essa medida eu posso pegar como referência um ano duplicado, assim me daria outro duplicado, descobriremos se aconteceu caso o número de duplicados aumente.
+-   **Nota:** sei que isso é perigoso, há o caso de 1972, por exemplo, que é duplicado e mal formatado, além disso, 1971 está faltante, assim assumo que 1971 seria o primeiro 1972 da sequencia, pelo menos isso não parece absurdo. Outro ponto, poderia ser dito que com essa medida eu posso pegar como referência um ano duplicado, assim me daria outro duplicado, descobriremos se aconteceu caso o número de duplicados aumente.
 
 ```{r ano processing, warning=FALSE}
+
 df_emissoes$ano[df_emissoes$ano>2024 & !is.na(df_emissoes$ano)] <- df_emissoes$ano[which(df_emissoes$ano>2024 & !is.na(df_emissoes$ano)) - 1] + 1
 
 # Verificando se funcionou, primeiro vejo se aumentou o número de duplicados, depois vejo se vale que o ano anterior = lag(ano)
@@ -151,25 +161,26 @@ Para isso vou normalizar esses valores para as unidades, utilizando a função: 
 $$ Podemos fazer o mesmo para valores extremamente pequenos usando o mesmo raciocício, exceto para o `carbonatacao_cimento` parece que o padrão está entre 0 e 1, usamos a mesma fórmula com ceiling.
 
 ```{r outliers, warning=FALSE}
+
 df_emissoes <- df_emissoes %>% 
   mutate(across(-c(ano, carbonatacao_cimento), ~ ifelse(abs(.) > 20 | abs(.) < 0.00001 , . / 10^floor(log10(abs(.))), .))) %>% 
            mutate(across(carbonatacao_cimento, ~ ifelse(abs(.) > 1 | abs(.) < 0.00001 , . / 10^ceiling(log10(abs(.))), .)))
 
 
-skim(df_emissoes)
+desc(df_emissoes) %>% gt()
 ```
 
 ### 6.1 Lidando com o valor nulo do ano
 
 -   Terceiro, lidaremos com o valor nulo do ano, primeiro vamos analisar:
 
-    ```{r Year null}
-    df_emissoes_indexed = df_emissoes %>% 
+```{r Year null}
+df_emissoes_indexed = df_emissoes %>% 
       mutate(idx = row_number())
           
-    gt(df_emissoes_indexed[c(1, which(is.na(df_emissoes$ano))),]) # Parece que está na última linha
+gt(df_emissoes_indexed[c(1, which(is.na(df_emissoes$ano))),]) # Parece que está na última linha
 
-    ```
+```
 
 Note que o valor do `crescimento_concentracao_atmosferica` é o único valor dessa útima linha linha "fantasma", ao mesmo tempo que é a única instância faltante no primeiro ano da série, minha hipótese é que esta coluna esteja deslocada um período a frente.
 
@@ -215,7 +226,7 @@ df_emissoes %>%
   filter(n() == 1) %>% 
   ungroup() %>% 
   filter(!if_any(everything(), is.na)) %>% 
-  skim(check_identity)
+  skim(check_identity) %>% as_tibble() %>%  gt()
 ```
 
 Parece que nossa hipótese é válida, a identidade é satisfeita para as linhas sem valores faltantes ou não duplicadas, e o valor faltante do ano foi corrigido. Isso também nos dá forte indicações de que nosso tratamento está correto.
@@ -267,9 +278,6 @@ df_emissoes <- df_emissoes %>%
     )
   )
 
-  # Excluindo a coluna `check_identity` e a última linha vazia
-  df_emissoes <- df_emissoes[-nrow(df_emissoes),-ncol(df_emissoes)]
-
 }
 
 # Verificando as linhas que ainda tem valores nulos
@@ -280,8 +288,56 @@ gt(df_emissoes %>% filter(if_any(everything(), is.na)))
 
 Parece que em 2003 há 2 valores nulos, impossibilitando inferir qual o valor correto para qualquer um deles. Podemos resolver isso utilizando interpolação linear, utilizaremos um intervalo de 5 anos:
 
-```{r interpolate warning=FALSE}
+```{r interpolation, warning=FALSE}
+row <- which(is.na(df_emissoes[, "emissao_combustivel_fossil"]))
+h <- 3
 
+if (length(row) > 0) {
+  print("interpolando...")
+  df_emissoes[row, "emissao_combustivel_fossil"] <-  mean(df_emissoes[(row-h):(row+h), "emissao_combustivel_fossil"][[1]], na.rm = TRUE)
+  df_emissoes$budget_imbalance[row] <- 
+  df_emissoes$check_identity[row] -
+  df_emissoes$emissao_combustivel_fossil[row]
+}
+
+# Excluindo a coluna `check_identity` e a última linha vazia
+df_emissoes <- df_emissoes[-nrow(df_emissoes),-ncol(df_emissoes)]
+
+gt(df_emissoes %>% filter(if_any(everything(), is.na)))
+
+
+
+```
+
+## 9. Definindo os Dados como Séries Temporais
+
+O R trata o nosso dataframe como uma tabela comum, sem saber que as linhas representam anos consecutivos. Nesse sentido, para já nos prepararmos, inclusive, para as próximas entregas, devemos definir as variáveis como séries temporais, como segue:
+
+```{r ts def}
+# Ano inicial da série
+ano_inicio <- min(df_emissoes$ano, na.rm = TRUE)  # 1959
+
+# Definindo cada coluna como série temporal (frequência anual = 1)
+ts_emissao_combustivel_fossil <- ts(df_emissoes$emissao_combustivel_fossil,      
+                                    start = ano_inicio, frequency = 1)
+
+ts_emissao_uso_do_solo <- ts(df_emissoes$emissao_uso_do_solo, 
+                             start = ano_inicio, frequency = 1)
+
+ts_crescimento_concentracao_atm <- ts(df_emissoes$crescimento_concentracao_atmosferica, 
+                                      start = ano_inicio, frequency = 1)
+
+ts_absorcao_oceano <- ts(df_emissoes$absorcao_oceano, 
+                         start = ano_inicio, frequency = 1)
+
+ts_absorcao_biosfera <- ts(df_emissoes$absorcao_biosfera, 
+                              start =ano_inicio, frequency = 1)
+
+ts_carbonatacao_cimento <- ts(df_emissoes$carbonatacao_cimento,
+                              start = ano_inicio, frequency = 1)
+
+ts_budget_imbalance <- ts(df_emissoes$budget_imbalance, 
+                              start = ano_inicio, frequency = 1)
 ```
 
 # Análise Exploratória
@@ -294,8 +350,10 @@ Para fazer esta análise, vamos seguir os seguintes passos:
 
 ```{r EDA}
 # Salvando os dados tratados
+# Salvando os dados
+if (!dir.exists("data")) dir.create("data")
 write.csv(df_emissoes, "./data/df_emissoes_slvr.csv")
-kable(describe(df_emissoes))
+desc(df_emissoes) %>% gt()
 ```
 
 -   Primeira coisa a notar é a média e a mediana estarem próximas em praticamente todas as variáveis, indicando pouca assimetria na distribuição dos dados. Isso é demonstrado também pelo skewness, onde observamos que a maior assimetria positiva se encontra na carbonatação do cimento, informando que, em geral, os desvios acima da média nessa categoria são maiores que os desvios dos registros abaixo dela.
@@ -306,7 +364,7 @@ kable(describe(df_emissoes))
 
 -   Por outro lado, a maior curtose negativa relevante em termos absoluto pertence às emissões de combustíveis fósseis. Embora essa váriavel apresente o maior intervalo de valores entre as instâncias, refletindo o crescimento das emissões durantes os anos, ela mantém um desvio padrão relativamente pequeno comparado à média. Isso indica que, mesmo com uma variação absoluta superior às demais, a série apresenta uma trajetória persistente e contínua na sua tendência.
 
-```{r}
+```{r plots, warning=FALSE}
 plots <- list()
 
 for (col in setdiff(names(df_emissoes), "ano")) {
@@ -316,8 +374,16 @@ for (col in setdiff(names(df_emissoes), "ano")) {
   plots[[col]] <- p
 }
 
-wrap_plots
-
-
+plots
 
 ```
+
+Rafa: A base do Global Carbon Project se estende de 1959 a 2024, com 66 observações anuais ao todo, após o tratamento dos dados realizado nas seções anteriores. A inspeção inicial revelou problemas de formatação em 8 entradas — valores com separadores decimais inconsistentes —, linhas duplicadas (anos 1967 e 1980) e um deslocamento temporal de um período na variável de crescimento da concentração atmosférica, tendo todos sido corrigidos antes da visualização e análise dos dados.
+
+As séries apresentam comportamentos bastante distintos entre si. A emissão por combustível fóssil exibe crescimento praticamente monotônico ao longo de todo o período, partindo de cerca de 2,5 GtC em 1959 e atingindo mais de 10 GtC em 2024 — um aumento de aproximadamente 4 vezes, com leve interrupção no início dos anos 2000, em razão da falta de dados. A carbonatação do cimento segue trajetória similar de crescimento acelerado, especialmente a partir dos anos 2000, refletindo a expansão da indústria da construção global e seus impactos.
+
+Por outro lado, a emissão por mudança do uso do solo apresenta tendência de queda no longo prazo, com pico próximo a 2,4 GtC no início da série e valores em torno de 1,2 e 1,3 GtC nos anos recentes, embora com alta volatilidade ao longo de todo o período.
+
+As variáveis de absorção — oceânica e pela biosfera — exibem tendência de crescimento no tempo, o que é consistente com o aumento das emissões totais: sumidouros naturais absorvem, progressivamente, mais carbono. A absorção oceânica, em especial, apresenta crescimento mais suave e regular, enquanto a biosfera terrestre mostra maior variabilidade interanual.
+
+O crescimento da concentração atmosférica apresenta tendência de alta com volatilidade relevante, atingindo valores próximos a 8 ppm em 2024 — o maior da série. O budget imbalance oscila em torno de zero sem tendência clara, comportamento esperado para um termo de erro contábil. Já o check_identity — variável auxiliar de validação da identidade contábil — apresenta desvios pontuais significativos em anos específicos (notadamente 2003, onde não há dados, 2010 e 2017), correspondentes a observações com valores ausentes ou corrigidos, e converge para zero no restante da série, confirmando a consistência interna da base após o tratamento.
