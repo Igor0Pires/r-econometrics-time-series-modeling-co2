@@ -1,11 +1,14 @@
 ---
 title: "Entrega 1 - Limpeza e Análise Inicial"
-output: html_document
+output:
+  html_document: default
 ---
 
 ## Integrantes:
 
 -   Igor Pires Ferreira - 15459924
+-   Arthur Oliveira Santos - 15493902
+-   Enrico Vitolo - 14568069
 
 ------------------------------------------------------------------------
 
@@ -17,10 +20,14 @@ library(readxl)
 library(curl)
 library(tidyverse)
 library(skimr)
-library(gt)
+library(psych)
+library(patchwork)
+library(corrplot)
 ```
 
 ------------------------------------------------------------------------
+
+# Tratamento dos dados
 
 ## 1. Obtendo os Dados
 
@@ -39,10 +46,9 @@ df_emissoes <- unique(read_excel(tmp_path, sheet = sheet, skip = skip_header, na
 
 ## 2. Primeiras Impressões
 
-```{r first steps}
+```{r first steps, warning=FALSE}
 
 skim(df_emissoes)
-
 
 ```
 
@@ -109,10 +115,8 @@ df_emissoes <- df_emissoes %>% mutate(across(where(is.character), as.numeric))
 
 Próximo passo será descrever os dados e analisar possiveis inconsistencias
 
-```{r describe}
+```{r describe, warning=FALSE}
 skim(df_emissoes)
-
-nrow(df_emissoes)
 ```
 
 Aqui aparecem outros problemas:
@@ -154,7 +158,9 @@ df_emissoes <- df_emissoes %>%
 
 skim(df_emissoes)
 ```
+
 ### 6.1 Lidando com o valor nulo do ano
+
 -   Terceiro, lidaremos com o valor nulo do ano, primeiro vamos analisar:
 
     ```{r Year null}
@@ -164,8 +170,6 @@ skim(df_emissoes)
     gt(df_emissoes_indexed[c(1, which(is.na(df_emissoes$ano))),]) # Parece que está na última linha
 
     ```
-
-
 
 Note que o valor do `crescimento_concentracao_atmosferica` é o único valor dessa útima linha linha "fantasma", ao mesmo tempo que é a única instância faltante no primeiro ano da série, minha hipótese é que esta coluna esteja deslocada um período a frente.
 
@@ -237,6 +241,7 @@ Conhecendo a identidade e estando todas no mesmo período, podemos tratar direta
 
 ```{r na processing, warning = FALSE}
 
+if ("check_identity" %in% names(df_emissoes)) {
 
 df_emissoes <- df_emissoes %>% 
   mutate(
@@ -262,6 +267,10 @@ df_emissoes <- df_emissoes %>%
     )
   )
 
+  # Excluindo a coluna `check_identity` e a última linha vazia
+  df_emissoes <- df_emissoes[-nrow(df_emissoes),-ncol(df_emissoes)]
+
+}
 
 # Verificando as linhas que ainda tem valores nulos
 gt(df_emissoes %>% filter(if_any(everything(), is.na)))
@@ -269,23 +278,46 @@ gt(df_emissoes %>% filter(if_any(everything(), is.na)))
 
 ```
 
-Parece que em 2003 há 2 valores nulos, impossibilitando inferir qual o valor correto para qualquer um deles.
+Parece que em 2003 há 2 valores nulos, impossibilitando inferir qual o valor correto para qualquer um deles. Podemos resolver isso utilizando interpolação linear, utilizaremos um intervalo de 5 anos:
 
-## 9. Análise Exploratória
+```{r interpolate warning=FALSE}
 
-```{r EDA}
-# Salvando os dados
-write.csv(df_emissoes, "./data/df_emissoes_slvr.csv")
-skim(df_emissoes)
 ```
 
+# Análise Exploratória
+
+Para fazer esta análise, vamos seguir os seguintes passos:
+
+-   Primeiro trazer uma análise descritiva dos dados
+
+## 1. Análise Descritiva
+
+```{r EDA}
+# Salvando os dados tratados
+write.csv(df_emissoes, "./data/df_emissoes_slvr.csv")
+kable(describe(df_emissoes))
+```
+
+-   Primeira coisa a notar é a média e a mediana estarem próximas em praticamente todas as variáveis, indicando pouca assimetria na distribuição dos dados. Isso é demonstrado também pelo skewness, onde observamos que a maior assimetria positiva se encontra na carbonatação do cimento, informando que, em geral, os desvios acima da média nessa categoria são maiores que os desvios dos registros abaixo dela.
+
+-   Em direção oposta, o buim tem a maior assimetria negativa, considerando que ela representa aquilo que não conhecemos sobre o ciclo do carbono, o fato da média ser positiva e o desvio padrão elevado sugere que a instância possui um viés ruidoso sistemático.
+
+-   A maior kurtose positiva é 1.12 pelas emissões devido a mudanças do uso do solo, indicando maior concentração em torno da média, com menor incidência de outliers, provavelmente devido a maior concentração na contribuição vinda do grupo restrito de países, como indicado no texto de motivação. 
+
+-   Por outro lado, a maior curtose negativa relevante em termos absoluto pertence às emissões de combustíveis fósseis. Embora essa váriavel apresente o maior intervalo de valores entre as instâncias, refletindo o crescimento das emissões durantes os anos, ela mantém um desvio padrão relativamente pequeno comparado à média. Isso indica que, mesmo com uma variação absoluta superior às demais, a série apresenta uma trajetória persistente e contínua na sua tendência.
+
 ```{r}
+plots <- list()
+
 for (col in setdiff(names(df_emissoes), "ano")) {
   p <- ggplot(df_emissoes, aes(x = ano, y=.data[[col]])) +
     geom_line() +
     labs(title = col, y = col)
-  print(p)
+  plots[[col]] <- p
 }
+
+wrap_plots
+
 
 
 ```
